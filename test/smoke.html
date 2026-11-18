@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Leaflet.SoundRings smoke test</title>
+<style>
+	body { font: 14px/1.4 system-ui, sans-serif; margin: 16px; }
+	#map { height: 320px; max-width: 640px; }
+	.pass { color: #3f8a3a; } .fail { color: #b8411c; font-weight: 600; }
+	pre { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>Leaflet.SoundRings smoke test</h1>
+<p>Runs the plugin against a real Leaflet map. <a href="?leaflet=1">Leaflet 1.9.4</a> · <a href="?leaflet=2">Leaflet 2.0.0-beta.4</a></p>
+<p id="summary">Running…</p>
+<div id="map"></div>
+<pre id="log"></pre>
+<script>
+(function () {
+	var v2 = /[?&]leaflet=2\b/.test(location.search);
+	var base = v2 ? 'https://cdn.jsdelivr.net/npm/leaflet@2.0.0-beta.4/dist/' : 'https://unpkg.com/leaflet@1.9.4/dist/';
+	var css = document.createElement('link');
+	css.rel = 'stylesheet'; css.href = base + 'leaflet.css';
+	document.head.appendChild(css);
+	function load(src, cb) {
+		var s = document.createElement('script'); s.src = src; s.onload = cb;
+		s.onerror = function () { done([{ ok: false, name: 'load ' + src }]); };
+		document.head.appendChild(s);
+	}
+	load(base + (v2 ? 'leaflet-global.js' : 'leaflet.js'), function () { load('../leaflet-soundrings.js', run); });
+
+	function done(results) {
+		var failed = results.filter(function (r) { return !r.ok; });
+		var summary = document.getElementById('summary');
+		summary.className = failed.length ? 'fail' : 'pass';
+		summary.textContent = (failed.length ? 'FAIL' : 'PASS') + ': ' + (results.length - failed.length) + '/' + results.length +
+			' checks passed on Leaflet ' + (window.L && L.version);
+		document.getElementById('log').textContent = results.map(function (r) {
+			return (r.ok ? 'ok   ' : 'FAIL ') + r.name + (r.info ? '  (' + r.info + ')' : '');
+		}).join('\n');
+		document.title = (failed.length ? 'FAIL' : 'PASS') + ' smoke ' + (window.L && L.version);
+		window.__smoke = { pass: !failed.length, version: window.L && L.version, results: results };
+	}
+
+	function run() {
+		var results = [];
+		function check(name, cond, info) { results.push({ ok: !!cond, name: name, info: info }); }
+		function near(a, b, eps) { return Math.abs(a - b) <= (eps || 1e-6); }
+		try {
+			check('L.soundRings is installed', typeof L.soundRings === 'function' && typeof L.SoundRings === 'function');
+			var map = new L.Map('map').setView([34.4, -118.55], 12);
+			var rings = L.soundRings([34.4, -118.55], { sourceDb: 150, refDistance: 10, unit: 'ft', levels: [120, 100, 85, 70] }).addTo(map);
+			var r = rings.getRadii();
+			check('4 rings', r.length === 4, r.length);
+			check('loudest ring first', r[0].level === 120 && r[3].level === 70);
+			check('100 dB ring = 3162.2776601683795 ft', near(r[1].radius, 3162.2776601683795), r[1].radius);
+			check('radiusMeters = ft * 0.3048', near(r[1].radiusMeters, 3162.2776601683795 * 0.3048));
+			var circles = [], labels = 0, source = 0;
+			rings.eachLayer(function (l) {
+				if (l instanceof L.Circle) { circles.push(l); }
+				else if (l instanceof L.Marker) { labels++; }
+				else if (l instanceof L.CircleMarker) { source++; }
+			});
+			check('4 L.Circle layers with metre radii', circles.length === 4 &&
+				near(circles[2].getRadius(), r[1].radiusMeters), circles.map(function (c) { return Math.round(c.getRadius()); }).join(','));
+			check('4 labels + 1 source marker', labels === 4 && source === 1, labels + '+' + source);
+			check('tooltips and popups bound', circles.every(function (c) { return c.getTooltip() && c.getPopup(); }));
+			check('tooltip text shows the level', /100 dB at 3,162 ft/.test(circles[2].getTooltip().getContent()), circles[2].getTooltip().getContent());
+			check('SVG paths rendered', document.querySelectorAll('#map path.leaflet-interactive').length === 4);
+			check('labels rendered', document.querySelectorAll('#map .leaflet-soundrings-label').length === 4);
+			circles[2].openPopup();
+			var popup = document.querySelector('#map .leaflet-popup-content');
+			check('popup opens with level', popup && /100 dB/.test(popup.textContent), popup && popup.textContent);
+			map.closePopup();
+
+			var events = 0;
+			rings.on('soundrings:update', function () { events++; });
+			rings.setLevels([90]);
+			check('setLevels redraws', rings.getRadii().length === 1 && near(rings.getRadii()[0].radius, 10000) && events === 1);
+			rings.setSource(110, 100);
+			check('setSource redraws', near(rings.getRadii()[0].radius, 1000), rings.getRadii()[0].radius);
+			rings.setUnit('m');
+			check('setUnit converts refDistance', rings.options.unit === 'm' && near(rings.options.refDistance, 30.48) &&
+				near(rings.getRadii()[0].radius, 304.8) && near(rings.getRadii()[0].radiusMeters, 304.8));
+			var free = rings.getRadii()[0].radius;
+			rings.setAbsorption(true);
+			check('absorption shortens the ring', rings.getRadii()[0].radius < free, free + ' -> ' + rings.getRadii()[0].radius);
+			var threw = false;
+			try { rings.setLevels(['loud']); } catch (e) { threw = e instanceof RangeError; }
+			check('bad input throws and keeps the old rings', threw && rings.getRadii().length === 1);
+			rings.setLatLng([34.41, -118.56]);
+			check('setLatLng moves rings', near(rings.getLatLng().lat, 34.41));
+			map.fitBounds(rings.getBounds());
+			check('getBounds works', rings.getBounds().isValid());
+			map.removeLayer(rings);
+			check('removes cleanly', document.querySelectorAll('#map path.leaflet-interactive').length === 0);
+		} catch (e) {
+			check('no exception', false, e && (e.stack || e.message || e));
+		}
+		done(results);
+	}
+}());
+</script>
+</body>
+</html>
