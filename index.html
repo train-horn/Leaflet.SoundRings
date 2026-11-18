@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Leaflet.SoundRings demo</title>
+<meta name="description" content="Leaflet plugin that draws rings where a point sound source falls to chosen decibel levels (inverse-square law, optional air absorption).">
+<style>
+	:root { --accent: #b8411c; --text: #1a1a1a; --muted: #555; --bg: #fbf7ef; --line: #ddd5c6; }
+	* { box-sizing: border-box; }
+	html, body { margin: 0; height: 100%; }
+	body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--text); background: #fff;
+		display: grid; grid-template-columns: 320px 1fr; grid-template-rows: 100%; }
+	aside { background: var(--bg); border-right: 1px solid var(--line); padding: 16px; overflow-y: auto; }
+	#map { height: 100%; }
+	h1 { font-size: 20px; margin: 0 0 4px; }
+	h2 { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 18px 0 6px; }
+	p { margin: 6px 0; color: var(--muted); }
+	label { display: block; margin: 8px 0 2px; font-weight: 600; }
+	input[type=number], input[type=text], select { width: 100%; padding: 6px 8px; font: inherit; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+	.row { display: flex; gap: 8px; } .row > div { flex: 1; }
+	.check { display: flex; gap: 6px; align-items: center; font-weight: 400; }
+	button { font: inherit; padding: 4px 8px; border: 1px solid var(--line); background: #fff; border-radius: 4px; cursor: pointer; margin: 2px 2px 0 0; }
+	button:hover { border-color: var(--accent); }
+	table { width: 100%; border-collapse: collapse; margin-top: 4px; font-variant-numeric: tabular-nums; }
+	td, th { text-align: left; padding: 3px 4px; border-bottom: 1px solid var(--line); }
+	.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+	#err { color: var(--accent); font-weight: 600; }
+	small, .note { font-size: 12px; color: var(--muted); }
+	a { color: #0b5faf; }
+	@media (max-width: 760px) {
+		body { grid-template-columns: 1fr; grid-template-rows: auto 60vh; height: auto; }
+		aside { border-right: 0; border-bottom: 1px solid var(--line); }
+		#map { height: 60vh; }
+	}
+</style>
+</head>
+<body>
+<aside>
+	<h1>Leaflet.SoundRings</h1>
+	<p>Rings where a point source's sound level falls to each level, using the inverse-square law. Click the map to move the source.</p>
+	<p class="note">Running on Leaflet <span id="ver">…</span> · <a id="switch" href="?leaflet=2">try Leaflet 2.0 beta</a></p>
+
+	<h2>Source</h2>
+	<div class="row">
+		<div><label for="src">Level (dB)</label><input id="src" type="number" step="0.1" value="110"></div>
+		<div><label for="ref">at distance</label><input id="ref" type="number" step="any" min="0" value="100"></div>
+		<div><label for="unit">unit</label><select id="unit"><option value="ft">ft</option><option value="m">m</option></select></div>
+	</div>
+	<div>
+		<button data-preset="110,100,ft">Train horn, FRA max (110 dB @ 100 ft)</button>
+		<button data-preset="96,100,ft">FRA min (96 dB @ 100 ft)</button>
+		<button data-preset="150,10,ft">Rated 150 dB @ 10 ft</button>
+		<button data-preset="120,1,m">120 dB @ 1 m</button>
+	</div>
+
+	<h2>Levels</h2>
+	<label for="levels">dB levels, comma separated</label>
+	<input id="levels" type="text" value="120, 100, 85, 70">
+
+	<h2>Options</h2>
+	<label class="check"><input id="abs" type="checkbox"> Approximate air absorption (1.9 dB/km)</label>
+	<label class="check"><input id="labels" type="checkbox" checked> Ring labels</label>
+
+	<h2>Radii (<code>getRadii()</code>)</h2>
+	<div id="err"></div>
+	<table><thead><tr><th>Level</th><th>Distance</th></tr></thead><tbody id="radii"></tbody></table>
+
+	<h2>About</h2>
+	<p class="note">Example: a locomotive horn sounded at a grade crossing. US rules (49 CFR 229.129) require 96–110 dB(A) at 100 ft in front of the locomotive; the map location is illustrative.</p>
+	<p class="note">Free-field estimate: no terrain, buildings, ground reflection, wind or temperature effects. Real levels can differ by several dB. The figures are not measurements.</p>
+	<p class="note">Same formula as the <a href="https://train-horn.com/tools/decibel-distance/">Train Horn decibel distance calculator</a>. Source code and API: <a href="https://github.com/train-horn/Leaflet.SoundRings">GitHub</a> · <a href="test/smoke.html">smoke test</a>.</p>
+</aside>
+<div id="map" role="application" aria-label="Map with sound level rings"></div>
+
+<script>
+(function () {
+	var v2 = /[?&]leaflet=2\b/.test(location.search);
+	var base = v2 ? 'https://cdn.jsdelivr.net/npm/leaflet@2.0.0-beta.4/dist/' : 'https://unpkg.com/leaflet@1.9.4/dist/';
+	var css = document.createElement('link');
+	css.rel = 'stylesheet'; css.href = base + 'leaflet.css';
+	document.head.appendChild(css);
+	var sw = document.getElementById('switch');
+	sw.href = v2 ? '?leaflet=1' : '?leaflet=2';
+	sw.textContent = v2 ? 'switch to Leaflet 1.9.4' : 'try Leaflet 2.0 beta';
+	function load(src, cb) { var s = document.createElement('script'); s.src = src; s.onload = cb; document.head.appendChild(s); }
+	load(base + (v2 ? 'leaflet-global.js' : 'leaflet.js'), function () { load('leaflet-soundrings.js', init); });
+
+	function $(id) { return document.getElementById(id); }
+
+	function init() {
+		$('ver').textContent = L.version;
+		var start = [34.3925, -118.5355];
+		var map = new L.Map('map').setView(start, 14);
+		new L.TileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+			maxZoom: 19,
+			attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+		}).addTo(map);
+
+		var rings = L.soundRings(start, { sourceDb: 110, refDistance: 100, unit: 'ft', levels: [120, 100, 85, 70] }).addTo(map);
+
+		function table() {
+			$('radii').innerHTML = rings.getRadii().map(function (r) {
+				return '<tr><td><span class="swatch" style="background:' + r.color + '"></span>' + r.level + ' dB</td><td>' +
+					LeafletSoundRings.math.formatDistance(r.radius, r.unit) + '</td></tr>';
+			}).join('');
+		}
+		rings.on('soundrings:update', table);
+		table();
+		map.fitBounds(rings.getBounds(), { padding: [20, 20] });
+
+		function apply(fit) {
+			$('err').textContent = '';
+			try {
+				var levels = $('levels').value.split(/[,\s]+/).filter(Boolean).map(Number);
+				rings.options.labels = $('labels').checked;
+				rings.setSource(parseFloat($('src').value), parseFloat($('ref').value), $('unit').value);
+				rings.setAbsorption($('abs').checked);
+				rings.setLevels(levels);
+				if (fit) { map.fitBounds(rings.getBounds(), { padding: [20, 20] }); }
+			} catch (e) {
+				$('err').textContent = e.message.replace('Leaflet.SoundRings: ', '');
+			}
+		}
+		['src', 'ref', 'levels'].forEach(function (id) { $(id).addEventListener('input', function () { apply(false); }); });
+		['unit', 'abs', 'labels'].forEach(function (id) { $(id).addEventListener('change', function () { apply(false); }); });
+		Array.prototype.forEach.call(document.querySelectorAll('[data-preset]'), function (b) {
+			b.addEventListener('click', function () {
+				var p = b.getAttribute('data-preset').split(',');
+				$('src').value = p[0]; $('ref').value = p[1]; $('unit').value = p[2];
+				apply(true);
+			});
+		});
+		map.on('click', function (e) { rings.setLatLng(e.latlng); });
+		window.demo = { map: map, rings: rings };
+	}
+}());
+</script>
+</body>
+</html>

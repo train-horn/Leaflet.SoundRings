@@ -1,0 +1,41 @@
+{
+  "name": "leaflet.soundrings",
+  "version": "1.0.0",
+  "description": "Leaflet plugin: concentric rings where a point sound source falls to chosen dB levels (inverse-square law, optional air absorption).",
+  "main": "leaflet-soundrings.js",
+  "files": [
+    "leaflet-soundrings.js",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/",
+    "test:smoke": "node test/run-smoke-jsdom.js"
+  },
+  "keywords": [
+    "leaflet",
+    "leaflet-plugin",
+    "sound",
+    "decibel",
+    "noise",
+    "spl",
+    "acoustics",
+    "inverse-square"
+  ],
+  "author": "Train Horn (https://train-horn.com/)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/train-horn/Leaflet.SoundRings.git"
+  },
+  "homepage": "https://train-horn.github.io/Leaflet.SoundRings/",
+  "peerDependencies": {
+    "leaflet": "^1.9.0 || ^2.0.0-beta.4"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.3"
+  }
+}
